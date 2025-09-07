@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Big Ten Stadiums KNN Color Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    #map { height: 90vh; width: 100vw; }
+    #controls { margin: 8px; }
+    .leaflet-popup-content { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>k: 
+      <select id="k">
+        <option>3</option>
+        <option>5</option>
+        <option>7</option>
+      </select>
+    </label>
+    <button id="random">Plot Random Point</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // NFL teams: [name, lat, lng, color]
+    const teams = [
+      ["Arizona Cardinals", 33.5275, -112.2625, "#97233F"],
+      ["Atlanta Falcons", 33.7550, -84.4008, "#A71930"],
+      ["Baltimore Ravens", 39.2780, -76.6227, "#241773"],
+      ["Buffalo Bills", 42.7738, -78.7868, "#00338D"],
+      ["Carolina Panthers", 35.2251, -80.8529, "#0085CA"],
+      ["Chicago Bears", 41.8623, -87.6167, "#0B162A"],
+      ["Cincinnati Bengals", 39.0954, -84.5161, "#FB4F14"],
+      ["Cleveland Browns", 41.5061, -81.6996, "#311D00"],
+      ["Dallas Cowboys", 32.7473, -97.0945, "#003594"],
+      ["Denver Broncos", 39.7439, -105.0201, "#002244"],
+      ["Detroit Lions", 42.3400, -83.0456, "#0076B6"],
+      ["Green Bay Packers", 44.5013, -88.0622, "#203731"],
+      ["Houston Texans", 29.6847, -95.4107, "#03202F"],
+      ["Indianapolis Colts", 39.7601, -86.1639, "#002C5F"],
+      ["Jacksonville Jaguars", 30.3239, -81.6373, "#006778"],
+      ["Kansas City Chiefs", 39.0490, -94.4839, "#E31837"],
+      ["Las Vegas Raiders", 36.0908, -115.1830, "#000000"],
+      ["Los Angeles Chargers", 33.9535, -118.3392, "#0080C6"],
+      ["Los Angeles Rams", 34.0139, -118.2845, "#003594"],
+      ["Miami Dolphins", 25.9580, -80.2389, "#008E97"],
+      ["Minnesota Vikings", 44.9737, -93.2578, "#4F2683"],
+      ["New England Patriots", 42.0909, -71.2643, "#002244"],
+      ["New Orleans Saints", 29.9509, -90.0817, "#D3BC8D"],
+      ["New York Giants", 40.8135, -74.0745, "#0B2265"],
+      ["New York Jets", 40.8135, -74.0745, "#125740"],
+      ["Philadelphia Eagles", 39.9008, -75.1675, "#004C54"],
+      ["Pittsburgh Steelers", 40.4468, -80.0158, "#FFB612"],
+      ["San Francisco 49ers", 37.4030, -121.9696, "#AA0000"],
+      ["Seattle Seahawks", 47.5952, -122.3316, "#002244"],
+      ["Tampa Bay Buccaneers", 27.9759, -82.5033, "#D50A0A"],
+      ["Tennessee Titans", 36.1665, -86.7713, "#4B92DB"],
+      ["Washington Commanders", 38.9078, -76.8644, "#5A1414"]
+    ];
+
+    // Helper: convert hex to rgb
+    function hexToRgb(hex) {
+      hex = hex.replace('#','');
+      if (hex.length === 3) hex = hex.split('').map(x=>x+x).join('');
+      const num = parseInt(hex, 16);
+      return [num>>16, (num>>8)&255, num&255];
+    }
+    // Helper: rgb to hex
+    function rgbToHex([r,g,b]) {
+      return "#" + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+    }
+    // Helper: average colors
+    function avgColor(colors) {
+      let r=0,g=0,b=0;
+      colors.forEach(c=>{
+        let [rr,gg,bb]=hexToRgb(c);
+        r+=rr; g+=gg; b+=bb;
+      });
+      r=Math.round(r/colors.length);
+      g=Math.round(g/colors.length);
+      b=Math.round(b/colors.length);
+      return [r,g,b];
+    }
+    // Helper: complementary color
+    function complement([r,g,b]) {
+      return [255-r,255-g,255-b];
+    }
+    // Helper: distance (lat/lng)
+    function dist(a, b) {
+      const toRad = x => x * Math.PI / 180;
+      const R = 6371;
+      const dLat = toRad(b[0]-a[0]);
+      const dLon = toRad(b[1]-a[1]);
+      const lat1 = toRad(a[0]);
+      const lat2 = toRad(b[0]);
+      const a1 = Math.sin(dLat/2)**2 + Math.sin(dLon/2)**2 * Math.cos(lat1) * Math.cos(lat2);
+      return 2 * R * Math.asin(Math.sqrt(a1));
+    }
+
+    // Map setup
+    const map = L.map('map').setView([39.5, -98.35], 4.2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    // Team markers
+    const teamMarkers = teams.map(([name,lat,lng,color]) =>
+      L.circleMarker([lat,lng], {
+        radius: 10, color: color, fillColor: color, fillOpacity: 0.9
+      }).addTo(map).bindPopup(name)
+    );
+
+    let randomMarker = null, lines = [];
+
+
+    function plotPointAt(lat, lng) {
+      if (randomMarker) map.removeLayer(randomMarker);
+      lines.forEach(l=>map.removeLayer(l));
+      lines = [];
+      randomMarker = L.circleMarker([lat,lng], {
+        radius: 10, color: "#000", fillColor: "#fff", fillOpacity: 1, weight: 2
+      }).addTo(map).bindPopup("Random Point").openPopup();
+
+      // KNN
+      const k = parseInt(document.getElementById('k').value);
+      const dists = teams.map((t,i)=>({
+        idx: i,
+        d: dist([lat,lng], [t[1],t[2]])
+      }));
+      dists.sort((a,b)=>a.d-b.d);
+      const nearest = dists.slice(0,k);
+
+      // Draw lines
+      nearest.forEach(({idx})=>{
+        const t = teams[idx];
+        const line = L.polyline([[lat,lng],[t[1],t[2]]], {color:'#888',weight:2,dashArray:'4'}).addTo(map);
+        lines.push(line);
+      });
+
+      // Majority vote for team
+      const counts = {};
+      let maxCount = 0, winnerIdx = null;
+      nearest.forEach(({idx})=>{
+        counts[idx] = (counts[idx]||0)+1;
+        if (counts[idx] > maxCount) {
+          maxCount = counts[idx];
+          winnerIdx = idx;
+        }
+      });
+      // If tie, pick the closest
+      if (Object.values(counts).filter(c=>c===maxCount).length > 1) {
+        winnerIdx = nearest[0].idx;
+      }
+      const winner = teams[winnerIdx];
+      randomMarker.setStyle({color:winner[3], fillColor:winner[3]});
+      randomMarker.bindPopup(`Likely Team: <b style="color:${winner[3]}">${winner[0]}</b>`);
+    }
+
+    function plotRandomPoint() {
+      // US bounds
+      const lat = 24 + Math.random() * (49-24);
+      const lng = -125 + Math.random() * (67-125);
+      plotPointAt(lat, lng);
+    }
+
+    document.getElementById('random').onclick = plotRandomPoint;
+    document.getElementById('k').onchange = ()=>{
+      if(randomMarker) {
+        // Re-plot at the last randomMarker location
+        const latlng = randomMarker.getLatLng();
+        plotPointAt(latlng.lat, latlng.lng);
+      }
+    };
+    document.getElementById('reset').onclick = ()=>{
+      if(randomMarker) map.removeLayer(randomMarker);
+      lines.forEach(l=>map.removeLayer(l));
+      lines = [];
+      randomMarker = null;
+    };
+
+    // Allow user to plot a point by clicking on the map
+    map.on('click', function(e) {
+      plotPointAt(e.latlng.lat, e.latlng.lng);
+    });
+  </script>
+</body>
+</html>
